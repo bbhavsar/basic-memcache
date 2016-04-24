@@ -33,7 +33,7 @@ ThreadPool::thread_func(void *arg)
 void
 ThreadPool::serve_loop(void)
 {
-    cout << "Thread "<< pthread_self() << " starting" << endl;
+    printf("Starting thread %p\n", pthread_self());
     while (true) {
         pthread_mutex_lock(&_m);
         while (_q.empty() && !_shutdown) {
@@ -48,10 +48,10 @@ ThreadPool::serve_loop(void)
          _q.pop_front();
         pthread_mutex_unlock(&_m);
 
-        cout << "Thread " << pthread_self() << " picked task " << task << endl;
+        printf("Thread %p picked task\n",  pthread_self());
         _do_work(task);
     }
-    cout << "Thread "<< pthread_self() << " exiting" << endl;
+    printf("Thread %p exiting\n", pthread_self());
 }
 
 void

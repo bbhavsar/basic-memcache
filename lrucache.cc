@@ -37,7 +37,7 @@ LRUCache::evict(void)
 {
     assert(!_q.empty());
     KeyValue kv = _q.back();
-    cout << "Evicting key " << kv.key << endl;
+    printf("Evicting key %s\n", kv.key.c_str());
     _lookup_map.erase(kv.key);
     _usage_bytes -= kv.bytes;
     free(kv.val);

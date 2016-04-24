@@ -17,6 +17,7 @@
 #include <assert.h>
 
 #include "memcache.h"
+#include "assert_fail.h"
 
 Memcache m(1024);
 
@@ -28,6 +29,35 @@ void *get_in_addr(struct sockaddr *sa)
     }
 
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+// Wrapper around read call that assert fails
+// on error and reads in loop till required
+// bytes are read.
+static void
+read_bytes(int fd, void *buffer, size_t len)
+{
+    char *buf = (char *)buffer;
+    unsigned int bytes_read = 0;
+    while (len > 0) {
+        int n = read(fd, buf + bytes_read, len);
+        ASSERT(n >= 0, "read error");
+        bytes_read += n;
+        len -= n;
+    }
+}
+
+// Print contents of buffer one char at a time
+// since it's not a null terminated string.
+// Avoids copying buffer.
+static void
+print_buf(char *s, size_t len)
+{
+    printf("Buffer ");
+    for (int i = 0; i < len; i++) {
+        printf("%c", s[i]);
+    }
+    printf("\n");
 }
 
 int
@@ -114,47 +144,57 @@ void
 Memcache::read_socket(void *arg)
 {
     uint64_t new_fd = (uint64_t) arg;
-    cout << "fd: " << new_fd << endl;
 
+    // Read header from the request.
     HEADER hdr = {0};
-    int n = read(new_fd, &hdr, sizeof hdr);
-    if (n < 0) {
-        perror("read");
-        close(new_fd);
-        return;
-    }
-    printf("Read %d bytes from socket\n", n);
+
+    read_bytes(new_fd, (void *)&hdr, sizeof hdr);
     printf("Magic %u, Opcode %u, Key Length: %u\n",
             hdr.magic, hdr.opcode, ntohs(hdr.key_length));
     unsigned key_length = ntohs(hdr.key_length);
     unsigned extra_length = hdr.extras_length;
     if (extra_length > 0) {
         uint8_t buf[256] = {0};
-        n = read(new_fd, buf, extra_length);
-        printf("n=%d, extra_length=%u\n", n, extra_length);
-        assert(n == extra_length);
+        read_bytes(new_fd, (void *)buf, extra_length);
     }
-    uint8_t key[256] = {0};
-    n = read(new_fd, key, key_length);
-    assert(n == key_length);
-    printf("Key: %s\n", key);
-    if (hdr.opcode == 0x01) {
+
+    // Read key
+    char *key_buf = malloc(key_length);
+    ASSERT(key_buf, "Failed to allocate key buf");
+    memset(key_buf, 0, key_length);
+
+    read_bytes(new_fd, (void *)key_buf, key_length);
+    string key(key_buf, key_length);
+
+    printf("Key: %s\n", key.c_str());
+
+    // Action
+    switch (hdr.opcode) {
+    case 0x01:  {// Set
         unsigned val_len = ntohl(hdr.total_body_length) - extra_length - key_length;
-        uint8_t val[256] = {0};
-        n = read(new_fd, val, val_len);
-        assert(n == val_len);
-        printf("Setting value: %s\n", val);
+        void *val = malloc(val_len);
+        ASSERT(val, "Failed to allocate value buf");
+        memset(val, 0, val_len);
+        read_bytes(new_fd, val, val_len);
+        print_buf((char *)val, val_len);
         m._c.set(key, val, val_len);
-    } else if (hdr.opcode == 0x00) {
+        free(val);
+        break;
+    }
+    case 0x00:  {// Get
         void *val;
         size_t num_bytes;
         bool result = m._c.get(key, &val, &num_bytes);
         assert(result);
-        char *valarr = (char *)val;
-        for (int i = 0; i < num_bytes; i++) {
-            printf("Got value from cache: %c\n", valarr[i]);
-        }
+        print_buf((char *)val, num_bytes);
+        break;
     }
+    default:
+        fprintf(stderr, "Unimplemented opcode 0x%x\n", hdr.opcode);
+        exit(1);
+    }
+
+    free(key_buf);
     close(new_fd);
 }
 

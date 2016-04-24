@@ -1,10 +1,9 @@
 #include <assert.h>
-#include <iostream>
-using namespace std;
+#include <stdio.h>
 
 #define ASSERT(cond, msg) \
     if (!(cond)) {    \
-        cerr << msg << endl;    \
+        fprintf(stderr, "%s\n", msg);    \
         assert((cond));  \
     }
 
