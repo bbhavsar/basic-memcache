@@ -10,6 +10,7 @@ Key-values are maintained in Least Recently Used cache
 using LRU eviction policy.
 
 Memcached listens on port 11211
+
 To run the memcached server
 ```
 make
