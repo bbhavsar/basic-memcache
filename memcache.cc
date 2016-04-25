@@ -21,8 +21,9 @@
 
 static const char *PORT = "11211";
 static const int BACKLOG = 10;
-
-static Memcache m(1024 /* capacity_bytes */);
+// 1MB of cache
+static const size_t cache_size_bytes = 1024 * 1024;
+static Memcache m(cache_size_bytes);
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -289,6 +290,7 @@ Memcache::execute_opcode(void *arg)
         // Get the value from cache.
         bool result = m._c.get(key, &val, &num_bytes);
         if (result) {
+            // Debugging
             print_buf((char *)val, num_bytes);
         }
         // Respond to the client.
