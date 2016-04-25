@@ -1,6 +1,6 @@
 /*
-** memcache.cc -- a stream socket server demo
-*/
+ * memcache.cc -- a stream socket server demo
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +19,10 @@
 #include "memcache.h"
 #include "assert_fail.h"
 
-Memcache m(1024);
+static const char *PORT = "11211";
+static const int BACKLOG = 10;
+
+static Memcache m(1024 /* capacity_bytes */);
 
 // get sockaddr, IPv4 or IPv6:
 void *get_in_addr(struct sockaddr *sa)
@@ -33,8 +36,9 @@ void *get_in_addr(struct sockaddr *sa)
 
 // Wrapper around read call that assert fails
 // on error and reads in loop till required
-// bytes are read.
-static void
+// bytes are read except for EOF.
+// Returns true on EOF.
+static bool
 read_bytes(int fd, void *buffer, size_t len)
 {
     char *buf = (char *)buffer;
@@ -42,9 +46,14 @@ read_bytes(int fd, void *buffer, size_t len)
     while (len > 0) {
         int n = read(fd, buf + bytes_read, len);
         ASSERT(n >= 0, "read error");
+        if (n == 0) {
+            // EOF
+            return true;
+        }
         bytes_read += n;
         len -= n;
     }
+    return false;
 }
 
 // Wrapper around write call that assert fails
@@ -78,96 +87,172 @@ print_buf(char *s, size_t len)
 }
 
 int
-Memcache::accept_loop(void)
+Memcache::event_loop(void)
 {
-    int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
-    struct addrinfo hints, *servinfo, *p;
-    struct sockaddr_storage their_addr; // connector's address information
-    socklen_t sin_size;
-    struct sigaction sa;
-    int yes=1;
-    char s[INET6_ADDRSTRLEN];
-    int rv;
+    fd_set master;  // temp file descriptor list for select()
+    fd_set read_fds;  // temp file descriptor list for select()
+    int fdmax;        // maximum file descriptor number
 
+    int listener;     // listening socket descriptor
+    int newfd;        // newly accept()ed socket descriptor
+    struct sockaddr_storage remoteaddr; // client address
+    socklen_t addrlen;
+
+    char buf[256];    // buffer for client data
+    int nbytes;
+
+    char remoteIP[INET6_ADDRSTRLEN];
+
+    int yes=1;        // for setsockopt() SO_REUSEADDR, below
+    int i, rv;
+
+    struct addrinfo hints, *ai, *p;
+
+    FD_ZERO(&master);    // clear the master and temp sets
+    FD_ZERO(&read_fds);
+
+    // get us a socket and bind it
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
-
-    if ((rv = getaddrinfo(NULL, PORT, &hints, &servinfo)) != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-        return 1;
+    hints.ai_flags = AI_PASSIVE;
+    if ((rv = getaddrinfo(NULL, PORT, &hints, &ai)) != 0) {
+        fprintf(stderr, "selectserver: %s\n", gai_strerror(rv));
+        exit(1);
     }
 
-    // loop through all the results and bind to the first we can
-    for(p = servinfo; p != NULL; p = p->ai_next) {
-        if ((sockfd = socket(p->ai_family, p->ai_socktype,
-                p->ai_protocol)) == -1) {
-            perror("server: socket");
+    for(p = ai; p != NULL; p = p->ai_next) {
+        listener = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (listener < 0) {
             continue;
         }
+        // lose the pesky "address already in use" error message
+        setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
 
-        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-                sizeof(int)) == -1) {
-            perror("setsockopt");
-            exit(1);
-        }
-
-        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
-            close(sockfd);
-            perror("server: bind");
+        if (bind(listener, p->ai_addr, p->ai_addrlen) < 0) {
+            close(listener);
             continue;
         }
-
         break;
     }
 
-    freeaddrinfo(servinfo); // all done with this structure
-
-    if (p == NULL)  {
-        fprintf(stderr, "server: failed to bind\n");
-        exit(1);
+    // if we got here, it means we didn't get bound
+    if (p == NULL) {
+        fprintf(stderr, "selectserver: failed to bind\n");
+        exit(2);
     }
 
-    if (listen(sockfd, BACKLOG) == -1) {
+    freeaddrinfo(ai); // all done with this
+
+    // listen
+    if (listen(listener, BACKLOG) == -1) {
         perror("listen");
-        exit(1);
+        exit(3);
     }
 
-    // TODO: Install signal handler.
+    // add the listener to the master set
+    FD_SET(listener, &master);
 
-    printf("server: waiting for connections...\n");
+    // keep track of the biggest file descriptor
+    fdmax = listener; // so far, it's this one
 
-    while(1) {  // main accept() loop
-        memset(&their_addr, 0, sizeof their_addr);
-        sin_size = sizeof their_addr;
-        new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
-        if (new_fd == -1) {
-            fprintf(stderr, "Error in accept\n");
-            exit(1);
-            continue;
+    // Main event loop
+    // New connections are accepted and from
+    // existing connection only header is read.
+    // Once header is read, acting on the opcode
+    // getting/setting data from the cache
+    // is handled by one of the worker threads
+    // in the threadpool.
+    // This way main event loop thread does
+    // minimal work and allows multiple connections
+    // to get/set key values simultaneously.
+    for(;;) {
+        read_fds = master; // copy it
+
+        if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
+            perror("select");
+            exit(4);
         }
 
-        inet_ntop(their_addr.ss_family,
-            get_in_addr((struct sockaddr *)&their_addr),
-            s, sizeof s);
-        printf("server: got connection from %s, fd: %d\n", s, new_fd);
-        uint64_t cb_arg = new_fd;
-        _tp.assign_task((void *)cb_arg);
-    }
+        // run through the existing connections looking for data to read
+        for(i = 0; i <= fdmax; i++) {
+            if (FD_ISSET(i, &read_fds)) { // we got one!!
+                if (i == listener) {
+                    // handle new connections
+                    addrlen = sizeof remoteaddr;
+                    newfd = accept(listener,
+                        (struct sockaddr *)&remoteaddr,
+                        &addrlen);
+
+                    if (newfd == -1) {
+                        perror("accept");
+                    } else {
+                        FD_SET(newfd, &master); // add to master set
+                        if (newfd > fdmax) {    // keep track of the max
+                            fdmax = newfd;
+                        }
+                        printf("selectserver: new connection from %s on "
+                            "socket %d\n",
+                            inet_ntop(remoteaddr.ss_family,
+                                get_in_addr((struct sockaddr*)&remoteaddr),
+                                remoteIP, INET6_ADDRSTRLEN),
+                            newfd);
+                    }
+                } else {
+                    pthread_mutex_lock(&_m);
+                    if (_active_fds.count(i) == 0) {
+                        printf("Received data from accepted socket %d\n", i);
+                        // Read the header.
+                        // This helps us dertermine whether client
+                        // has closed connection or indeed sending
+                        // more bytes to read.
+                        CBArg *arg = (CBArg *)malloc(sizeof(CBArg));
+                        arg->fd = i;
+                        bool is_eof = read_header(i, &arg->hdr);
+                        if (is_eof) {
+                            printf("Closing connection on socket %d\n", i);
+                            free(arg);
+                            close(i);
+                            FD_CLR(i, &master);
+                        } else {
+                            // Offload task of intepreting
+                            // the opcode and setting/retrieving
+                            // data to worker thread.
+                            _active_fds.insert(i);
+                            _tp.assign_task((void *)arg);
+                        }
+                    }
+                    pthread_mutex_unlock(&_m);
+                } // END handle data from client
+            } // END got new incoming connection
+        } // END looping through file descriptors
+    } // END for(;;)
 
     return 0;
 }
 
 void
-Memcache::read_socket(void *arg)
+Memcache::remove_from_active_fds(int fd)
 {
-    uint64_t fd = (uint64_t) arg;
+    pthread_mutex_lock(&_m);
+    _active_fds.erase(fd);
+    pthread_mutex_unlock(&_m);
+}
 
-    // Read header from the request.
-    HEADER hdr = {0};
+bool
+Memcache::read_header(int fd, HEADER *hdr)
+{
+    return read_bytes(fd, (void *)hdr, sizeof *hdr);
+}
 
-    read_bytes(fd, (void *)&hdr, sizeof hdr);
+void
+Memcache::execute_opcode(void *arg)
+{
+    CBArg *cb_arg = (CBArg *)arg;
+    int fd = cb_arg->fd;
+    HEADER hdr = cb_arg->hdr;
+    free(cb_arg);
+
     printf("Magic %u, Opcode %u, Key Length: %u, CAS: %lu\n",
             hdr.magic, hdr.opcode, ntohs(hdr.key_length), ntohl(hdr.cas));
     unsigned key_length = ntohs(hdr.key_length);
@@ -179,18 +264,17 @@ Memcache::read_socket(void *arg)
     }
 
     // Read key
-    char *key_buf = malloc(key_length);
+    char *key_buf = (char *)malloc(key_length);
     ASSERT(key_buf, "Failed to allocate key buf");
     memset(key_buf, 0, key_length);
 
     read_bytes(fd, (void *)key_buf, key_length);
     string key(key_buf, key_length);
-
     printf("Key: %s\n", key.c_str());
 
     // Action
     switch (hdr.opcode) {
-    case 0x01:  {// Set
+    case 0x01:  {   // Set
         unsigned val_len = ntohl(hdr.total_body_length) - extra_length - key_length;
         void *val = malloc(val_len);
         ASSERT(val, "Failed to allocate value buf");
@@ -202,7 +286,7 @@ Memcache::read_socket(void *arg)
         m.respond_to_set(fd);
         break;
     }
-    case 0x00:  {// Get
+    case 0x00:  {   // Get
         void *val;
         size_t num_bytes;
         bool result = m._c.get(key, &val, &num_bytes);
@@ -216,9 +300,8 @@ Memcache::read_socket(void *arg)
         fprintf(stderr, "Unimplemented opcode 0x%x\n", hdr.opcode);
         exit(1);
     }
-
+    m.remove_from_active_fds(fd);
     free(key_buf);
-    close(fd);
 }
 
 void
@@ -262,7 +345,7 @@ Memcache::respond_to_set(int fd)
 int main()
 {
     m.init();
-    m.accept_loop();
+    m.event_loop();
 
     return 0;
 }
