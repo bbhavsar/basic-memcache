@@ -156,32 +156,25 @@ Memcache::event_loop(void)
     fdmax = listener; // so far, it's this one
 
     // Main event loop
-    // New connections are accepted and from
-    // existing connection only header is read.
-    // Once header is read, acting on the opcode
-    // getting/setting data from the cache
-    // is handled by one of the worker threads
-    // in the threadpool.
-    // This way main event loop thread does
-    // minimal work and allows multiple connections
+    // New connections are accepted and from existing connection only header is read.
+    // Once header is read, acting on the opcode getting/setting data from the cache
+    // is handled by one of the worker threads in the threadpool.
+    // This way main event loop thread does minimal work and allows multiple connections
     // to get/set key values simultaneously.
     for(;;) {
         read_fds = master; // copy it
-
         if (select(fdmax+1, &read_fds, NULL, NULL, NULL) == -1) {
             perror("select");
             exit(4);
         }
-
         // run through the existing connections looking for data to read
         for(i = 0; i <= fdmax; i++) {
             if (FD_ISSET(i, &read_fds)) { // we got one!!
                 if (i == listener) {
                     // handle new connections
                     addrlen = sizeof remoteaddr;
-                    newfd = accept(listener,
-                        (struct sockaddr *)&remoteaddr,
-                        &addrlen);
+                    newfd = accept(listener, (struct sockaddr *)&remoteaddr,
+                                   &addrlen);
 
                     if (newfd == -1) {
                         perror("accept");
@@ -190,12 +183,11 @@ Memcache::event_loop(void)
                         if (newfd > fdmax) {    // keep track of the max
                             fdmax = newfd;
                         }
-                        printf("selectserver: new connection from %s on "
-                            "socket %d\n",
-                            inet_ntop(remoteaddr.ss_family,
-                                get_in_addr((struct sockaddr*)&remoteaddr),
-                                remoteIP, INET6_ADDRSTRLEN),
-                            newfd);
+                        printf("selectserver: new connection from %s on socket %d\n",
+                                inet_ntop(remoteaddr.ss_family,
+                                    get_in_addr((struct sockaddr*)&remoteaddr),
+                                    remoteIP, INET6_ADDRSTRLEN),
+                                newfd);
                     }
                 } else {
                     pthread_mutex_lock(&_m);
@@ -244,6 +236,8 @@ Memcache::read_header(int fd, HEADER *hdr)
     return read_bytes(fd, (void *)hdr, sizeof *hdr);
 }
 
+// Callback function invoked by worker thread.
+// Executes the command from the request.
 void
 Memcache::execute_opcode(void *arg)
 {
