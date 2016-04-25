@@ -1,5 +1,5 @@
 /*
- * memcache.cc -- a stream socket server demo
+ * memcache.cc -- server for caching key-values
  */
 
 #include <stdio.h>
