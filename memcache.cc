@@ -79,7 +79,7 @@ static void
 print_buf(char *s, size_t len)
 {
     printf("Buffer ");
-    for (int i = 0; i < len; i++) {
+    for (unsigned i = 0; i < len; i++) {
         printf("%c", s[i]);
     }
     printf("\n");
@@ -96,9 +96,6 @@ Memcache::event_loop(void)
     int newfd;        // newly accept()ed socket descriptor
     struct sockaddr_storage remoteaddr; // client address
     socklen_t addrlen;
-
-    char buf[256];    // buffer for client data
-    int nbytes;
 
     char remoteIP[INET6_ADDRSTRLEN];
 
@@ -246,8 +243,8 @@ Memcache::execute_opcode(void *arg)
     HEADER hdr = cb_arg->hdr;
     free(cb_arg);
 
-    printf("Magic %u, Opcode %u, Key Length: %u, CAS: %lu\n",
-            hdr.magic, hdr.opcode, ntohs(hdr.key_length), ntohl(hdr.cas));
+    printf("Magic %u, Opcode %u, Key Length: %u\n",
+            hdr.magic, hdr.opcode, ntohs(hdr.key_length));
     unsigned key_length = ntohs(hdr.key_length);
     unsigned extra_length = hdr.extras_length;
     if (extra_length > 0) {

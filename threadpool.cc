@@ -16,7 +16,7 @@ ThreadPool::init(work_cb work_fptr, size_t num_threads)
     ASSERT(err == 0, "Failed initializing condvar");
 
     _tids.resize(_num_threads);
-   for (int i = 0; i < _num_threads; i++) {
+   for (unsigned i = 0; i < _num_threads; i++) {
         err = pthread_create(&_tids[i], NULL, thread_func, this);
         ASSERT(err == 0, "Failed creating thread");
     }
@@ -33,7 +33,7 @@ ThreadPool::thread_func(void *arg)
 void
 ThreadPool::serve_loop(void)
 {
-    printf("Starting thread %p\n", pthread_self());
+    printf("Starting thread %lu\n", pthread_self());
     while (true) {
         pthread_mutex_lock(&_m);
         while (_q.empty() && !_shutdown) {
@@ -48,10 +48,10 @@ ThreadPool::serve_loop(void)
          _q.pop_front();
         pthread_mutex_unlock(&_m);
 
-        printf("Thread %p picked task\n",  pthread_self());
+        printf("Thread %lu picked task\n",  pthread_self());
         _do_work(task);
     }
-    printf("Thread %p exiting\n", pthread_self());
+    printf("Thread %lu exiting\n", pthread_self());
 }
 
 void
@@ -75,7 +75,7 @@ ThreadPool::shutdown(void)
     pthread_mutex_unlock(&_m);
     pthread_cond_broadcast(&_cv);
 
-   for (int i = 0; i < _num_threads; i++) {
+   for (unsigned i = 0; i < _num_threads; i++) {
         pthread_join(_tids[i], NULL);
     }
 }
