@@ -23,7 +23,11 @@ public:
         ASSERT(err == 0, "Failed initializing mutex");
     }
 
+    // Fetch value associated with the key.
+    // Return the value in 'val' and size of the value in 'num_bytes' as output params.
+    // Returns true if key is present in the cache.
     bool get(const std::string& key, void **val, size_t *num_bytes);
+    // Set value in the cache.
     void set(const std::string& key, void *val, size_t num_bytes);
 private:
     // Evict least recently key-value from the back of the queue.
