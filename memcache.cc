@@ -314,8 +314,8 @@ Memcache::respond_to_get(int fd, bool available, void *val, size_t len)
     hdr.data_type = 0;
 
     hdr.status = htons(!available);
+    char not_found_str[] = "Not found";
     if (!available) {
-        char not_found_str[] = "Not found";
         val = not_found_str;
         len = sizeof not_found_str;
     }
