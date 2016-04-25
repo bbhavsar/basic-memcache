@@ -67,7 +67,6 @@ write_bytes(int fd, void *buffer, size_t len)
     while (len > 0) {
         int n = send(fd, buf + bytes_written, len, 0);
         ASSERT(n >= 0, "write error");
-        printf("Bytes written %d\n", n);
         bytes_written += n;
         len -= n;
     }
