@@ -19,7 +19,9 @@ public:
 
     int accept_loop(void);
     static void read_socket(void *arg);
-    void respond(int fd);
+private:
+    void respond_to_set(int fd);
+    void respond_to_get(int fd, bool available, void *val, size_t len);
 private:
     LRUCache _c;
     ThreadPool _tp;

@@ -47,6 +47,23 @@ read_bytes(int fd, void *buffer, size_t len)
     }
 }
 
+// Wrapper around write call that assert fails
+// on error and writes in loop till required
+// bytes are read.
+static void
+write_bytes(int fd, void *buffer, size_t len)
+{
+    char *buf = (char *)buffer;
+    unsigned int bytes_written = 0;
+    while (len > 0) {
+        int n = send(fd, buf + bytes_written, len, 0);
+        ASSERT(n >= 0, "write error");
+        printf("Bytes written %d\n", n);
+        bytes_written += n;
+        len -= n;
+    }
+}
+
 // Print contents of buffer one char at a time
 // since it's not a null terminated string.
 // Avoids copying buffer.
@@ -122,10 +139,12 @@ Memcache::accept_loop(void)
     printf("server: waiting for connections...\n");
 
     while(1) {  // main accept() loop
+        memset(&their_addr, 0, sizeof their_addr);
         sin_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &sin_size);
         if (new_fd == -1) {
-            perror("accept");
+            fprintf(stderr, "Error in accept\n");
+            exit(1);
             continue;
         }
 
@@ -143,19 +162,20 @@ Memcache::accept_loop(void)
 void
 Memcache::read_socket(void *arg)
 {
-    uint64_t new_fd = (uint64_t) arg;
+    uint64_t fd = (uint64_t) arg;
 
     // Read header from the request.
     HEADER hdr = {0};
 
-    read_bytes(new_fd, (void *)&hdr, sizeof hdr);
-    printf("Magic %u, Opcode %u, Key Length: %u\n",
-            hdr.magic, hdr.opcode, ntohs(hdr.key_length));
+    read_bytes(fd, (void *)&hdr, sizeof hdr);
+    printf("Magic %u, Opcode %u, Key Length: %u, CAS: %lu\n",
+            hdr.magic, hdr.opcode, ntohs(hdr.key_length), ntohl(hdr.cas));
     unsigned key_length = ntohs(hdr.key_length);
     unsigned extra_length = hdr.extras_length;
     if (extra_length > 0) {
-        uint8_t buf[256] = {0};
-        read_bytes(new_fd, (void *)buf, extra_length);
+        uint8_t buf[extra_length];
+        memset(buf, 0, extra_length);
+        read_bytes(fd, (void *)buf, extra_length);
     }
 
     // Read key
@@ -163,7 +183,7 @@ Memcache::read_socket(void *arg)
     ASSERT(key_buf, "Failed to allocate key buf");
     memset(key_buf, 0, key_length);
 
-    read_bytes(new_fd, (void *)key_buf, key_length);
+    read_bytes(fd, (void *)key_buf, key_length);
     string key(key_buf, key_length);
 
     printf("Key: %s\n", key.c_str());
@@ -175,18 +195,21 @@ Memcache::read_socket(void *arg)
         void *val = malloc(val_len);
         ASSERT(val, "Failed to allocate value buf");
         memset(val, 0, val_len);
-        read_bytes(new_fd, val, val_len);
+        read_bytes(fd, val, val_len);
         print_buf((char *)val, val_len);
         m._c.set(key, val, val_len);
         free(val);
+        m.respond_to_set(fd);
         break;
     }
     case 0x00:  {// Get
         void *val;
         size_t num_bytes;
         bool result = m._c.get(key, &val, &num_bytes);
-        assert(result);
-        print_buf((char *)val, num_bytes);
+        if (result) {
+            print_buf((char *)val, num_bytes);
+        }
+        m.respond_to_get(fd, result, val, num_bytes);
         break;
     }
     default:
@@ -195,14 +218,46 @@ Memcache::read_socket(void *arg)
     }
 
     free(key_buf);
-    close(new_fd);
+    close(fd);
 }
 
 void
-Memcache::respond(int fd)
+Memcache::respond_to_get(int fd, bool available, void *val, size_t len)
 {
+    HEADER hdr = {0};
+    hdr.magic = 0x81;
+    hdr.opcode = 0x00;
+    hdr.key_length = 0x0;
+    hdr.extras_length = 0x4;
+    hdr.data_type = 0;
+
+    hdr.status = htons(!available);
+    if (!available) {
+        char not_found_str[] = "Not found";
+        val = not_found_str;
+        len = sizeof not_found_str;
+    }
+    hdr.total_body_length = htonl(len + hdr.extras_length);
+
+    write_bytes(fd, &hdr, sizeof hdr);
+    uint32_t extra = 0;
+    write_bytes(fd, (void *)&extra, sizeof extra);
+    write_bytes(fd, val, len);
 }
 
+void
+Memcache::respond_to_set(int fd)
+{
+    HEADER hdr = {0};
+    hdr.magic = 0x81;
+    hdr.opcode = 0x01;
+    hdr.key_length = 0x0;
+    hdr.extras_length = 0;
+    hdr.data_type = 0;
+    hdr.status = 0;
+    hdr.total_body_length = 0;
+    write_bytes(fd, &hdr, sizeof hdr);
+}
 
 int main()
 {
