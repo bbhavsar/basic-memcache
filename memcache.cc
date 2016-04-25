@@ -269,20 +269,29 @@ Memcache::execute_opcode(void *arg)
         void *val = malloc(val_len);
         ASSERT(val, "Failed to allocate value buf");
         memset(val, 0, val_len);
+
+        // Read the value from the socket.
         read_bytes(fd, val, val_len);
+        // Print the value. Just for debugging.
         print_buf((char *)val, val_len);
+        // Set the key in the cache
         m._c.set(key, val, val_len);
+
         free(val);
+        // Respond to the client.
         m.respond_to_set(fd);
         break;
     }
     case 0x00:  {   // Get
         void *val;
         size_t num_bytes;
+
+        // Get the value from cache.
         bool result = m._c.get(key, &val, &num_bytes);
         if (result) {
             print_buf((char *)val, num_bytes);
         }
+        // Respond to the client.
         m.respond_to_get(fd, result, val, num_bytes);
         break;
     }
