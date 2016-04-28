@@ -23,6 +23,7 @@ typedef struct __attribute__((__packed__)) {
     uint64_t cas;
 } HEADER;
 
+
 class Memcache
 {
 public:
@@ -41,7 +42,8 @@ public:
     static void execute_opcode(void *arg);
 private:
     void respond_to_set(int fd);
-    void respond_to_get(int fd, bool available, void *val, size_t len);
+    void respond_to_get(int fd, bool available, void *val, size_t len,
+                        void *extra, size_t extra_len);
     void remove_from_active_fds(int fd);
 
     // Returns whether EOF

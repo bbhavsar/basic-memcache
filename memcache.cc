@@ -77,11 +77,11 @@ write_bytes(int fd, void *buffer, size_t len)
 // since it's not a null terminated string.
 // Avoids copying buffer.
 static void
-print_buf(char *s, size_t len)
+print_buf(unsigned char *s, size_t len)
 {
     printf("Buffer ");
     for (unsigned i = 0; i < len; i++) {
-        printf("%c", s[i]);
+        printf("0x%x ", s[i]);
     }
     printf("\n");
 }
@@ -244,14 +244,18 @@ Memcache::execute_opcode(void *arg)
     HEADER hdr = cb_arg->hdr;
     free(cb_arg);
 
-    printf("Magic %u, Opcode %u, Key Length: %u\n",
-            hdr.magic, hdr.opcode, ntohs(hdr.key_length));
-    unsigned key_length = ntohs(hdr.key_length);
-    unsigned extra_length = hdr.extras_length;
+    printf("Magic %u, Opcode %u, Key Length: %u Data type %u CAS %lu, Extra len %u\n",
+            hdr.magic, hdr.opcode, ntohs(hdr.key_length),
+            hdr.data_type, ntohl(hdr.cas), hdr.extras_length);
+    size_t key_length = ntohs(hdr.key_length);
+    size_t extra_length = hdr.extras_length;
+    void *extra = NULL;
     if (extra_length > 0) {
-        uint8_t buf[extra_length];
-        memset(buf, 0, extra_length);
-        read_bytes(fd, (void *)buf, extra_length);
+        extra = (void *)malloc(extra_length);
+        ASSERT(extra, "Failed allocating memory for extras\n");
+        memset(extra, 0, extra_length);
+        read_bytes(fd, extra, extra_length);
+        print_buf((unsigned char *)extra, extra_length);
     }
 
     // Read key
@@ -266,17 +270,25 @@ Memcache::execute_opcode(void *arg)
     // Action
     switch (hdr.opcode) {
     case 0x01:  {   // Set
-        unsigned val_len = ntohl(hdr.total_body_length) - extra_length - key_length;
+        unsigned int val_len = ntohl(hdr.total_body_length) - extra_length - key_length;
+        printf("Value len: %u\n", val_len);
         void *val = malloc(val_len);
         ASSERT(val, "Failed to allocate value buf");
         memset(val, 0, val_len);
 
         // Read the value from the socket.
         read_bytes(fd, val, val_len);
+
         // Print the value. Just for debugging.
-        print_buf((char *)val, val_len);
+        print_buf((unsigned char *)val, val_len);
+
+        // We only need to store flags part of extras.
+        uint32_t flags = 0x0;
+        size_t flag_size = min(sizeof flags, extra_length);
+        memcpy(&flags, extra, flag_size);
+
         // Set the key in the cache
-        m._c.set(key, val, val_len);
+        m._c.set(key, val, val_len, (void *)&flags, flag_size);
 
         free(val);
         // Respond to the client.
@@ -285,16 +297,19 @@ Memcache::execute_opcode(void *arg)
     }
     case 0x00:  {   // Get
         void *val;
-        size_t num_bytes;
+        size_t val_bytes;
+        void *ret_extra;
+        size_t ret_extra_bytes;
 
         // Get the value from cache.
-        bool result = m._c.get(key, &val, &num_bytes);
+        bool result = m._c.get(key, &val, &val_bytes, &ret_extra, &ret_extra_bytes);
         if (result) {
             // Debugging
-            print_buf((char *)val, num_bytes);
+            print_buf((unsigned char *) ret_extra, ret_extra_bytes);
+            print_buf((unsigned char *)val, val_bytes);
         }
         // Respond to the client.
-        m.respond_to_get(fd, result, val, num_bytes);
+        m.respond_to_get(fd, result, val, val_bytes, ret_extra, ret_extra_bytes);
         break;
     }
     default:
@@ -303,16 +318,20 @@ Memcache::execute_opcode(void *arg)
     }
     m.remove_from_active_fds(fd);
     free(key_buf);
+    if (extra) {
+        free(extra);
+    }
 }
 
 void
-Memcache::respond_to_get(int fd, bool available, void *val, size_t len)
+Memcache::respond_to_get(int fd, bool available, void *val, size_t len,
+                         void *extra, size_t extra_len)
 {
     HEADER hdr = {0};
     hdr.magic = 0x81;
     hdr.opcode = 0x00;
     hdr.key_length = 0x0;
-    hdr.extras_length = 0x4;
+    hdr.extras_length = extra_len;
     hdr.data_type = 0;
 
     hdr.status = htons(!available);
@@ -321,11 +340,11 @@ Memcache::respond_to_get(int fd, bool available, void *val, size_t len)
         val = not_found_str;
         len = sizeof not_found_str;
     }
+    printf("Extra len %u\n", extra_len);
     hdr.total_body_length = htonl(len + hdr.extras_length);
 
     write_bytes(fd, &hdr, sizeof hdr);
-    uint32_t extra = 0;
-    write_bytes(fd, (void *)&extra, sizeof extra);
+    write_bytes(fd, extra, extra_len);
     write_bytes(fd, val, len);
 }
 

@@ -26,9 +26,9 @@ public:
     // Fetch value associated with the key.
     // Return the value in 'val' and size of the value in 'num_bytes' as output params.
     // Returns true if key is present in the cache.
-    bool get(const std::string& key, void **val, size_t *num_bytes);
+    bool get(const std::string& key, void **val, size_t *val_bytes, void **extra, size_t *extra_bytes);
     // Set value in the cache.
-    void set(const std::string& key, void *val, size_t num_bytes);
+    void set(const std::string& key, void *val, size_t val_bytes, void *extra, size_t extra_bytes);
 private:
     // Evict least recently key-value from the back of the queue.
     void evict(void);
@@ -38,7 +38,9 @@ private:
     struct KeyValue {
         string key;
         void *val;
-        size_t bytes; // size of value
+        size_t val_bytes; // size of value
+        void *extra;
+        size_t extra_bytes;
     };
     typedef map<string, list<KeyValue>::iterator > LookupMap;
 
