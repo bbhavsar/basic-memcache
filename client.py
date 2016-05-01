@@ -1,5 +1,6 @@
 import bmemcached
 import time
+import random
 
 client = bmemcached.Client(('127.0.0.1:11211', ))
 
@@ -9,6 +10,8 @@ print client.get('k1')
 a=[1, 2, 3]
 print client.set('k', a)
 print client.get('k')
+
+time.sleep(random.randint(1, 5))
 
 b = 102400
 print client.set('k2', b)

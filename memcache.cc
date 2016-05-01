@@ -244,9 +244,9 @@ Memcache::execute_opcode(void *arg)
     HEADER hdr = cb_arg->hdr;
     free(cb_arg);
 
-    printf("Magic %u, Opcode %u, Key Length: %u Data type %u CAS %lu, Extra len %u\n",
+    printf("Magic %u, Opcode %u, Key Length: %u Data type %u Extra len %u\n",
             hdr.magic, hdr.opcode, ntohs(hdr.key_length),
-            hdr.data_type, ntohl(hdr.cas), hdr.extras_length);
+            hdr.data_type, hdr.extras_length);
     size_t key_length = ntohs(hdr.key_length);
     size_t extra_length = hdr.extras_length;
     void *extra = NULL;
@@ -340,7 +340,7 @@ Memcache::respond_to_get(int fd, bool available, void *val, size_t len,
         val = not_found_str;
         len = sizeof not_found_str;
     }
-    printf("Extra len %u\n", extra_len);
+    printf("Extra len %zu\n", extra_len);
     hdr.total_body_length = htonl(len + hdr.extras_length);
 
     write_bytes(fd, &hdr, sizeof hdr);
